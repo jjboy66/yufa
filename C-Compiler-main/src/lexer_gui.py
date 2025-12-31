@@ -1,6 +1,7 @@
 """
 C 语言编译器实验 - 语法分析 (完美表头优化版)
 """
+import os
 import tkinter as tk
 from tkinter import filedialog, scrolledtext, messagebox, ttk, font
 from lexer_core import Lexer, TYPES, EOF
@@ -32,8 +33,7 @@ class LexerApp(tk.Tk):
         top_frame.pack(fill='x')
 
         ttk.Button(top_frame, text="1. 加载 C 文件", command=self.load_file).pack(side='left', padx=5)
-        ttk.Button(top_frame, text="2. 运行词法分析", command=self.run_analysis).pack(side='left', padx=5)
-        ttk.Button(top_frame, text="3. 生成分析表 & 集合", command=self.run_parser).pack(side='left', padx=5)
+        ttk.Button(top_frame, text="2. 生成导表", command=self.run_generate_and_export).pack(side='left', padx=5)
         ttk.Button(top_frame, text="清除全部", command=self.clear_all).pack(side='right', padx=5)
 
         self.paned_window = ttk.PanedWindow(self, orient='horizontal')
@@ -164,14 +164,16 @@ class LexerApp(tk.Tk):
         else:
             messagebox.showerror("语法错误", message)
 
+    @staticmethod
+    def _fmt_set(s):
+        """Format a set for display"""
+        elements = sorted(list(s))
+        return "{" + ", ".join(elements) + "}"
+
     def display_sets(self, parser, sets_data):
         # 清空
         for item in self.sets_tree.get_children():
             self.sets_tree.delete(item)
-
-        def fmt_set(s):
-            elements = sorted(list(s))
-            return "{" + ", ".join(elements) + "}"
 
         # --- 核心辅助函数：插入显眼的表头 ---
         def add_section_header(title_left, title_right):
@@ -211,14 +213,14 @@ class LexerApp(tk.Tk):
         first = sets_data.get('first', {})
         for nt in sorted(first.keys()):
             name = parser.display(nt)
-            add_row(f"First({name})", "=", fmt_set(first[nt]))
+            add_row(f"First({name})", "=", self._fmt_set(first[nt]))
 
         # ====== 3. FOLLOW 集 ======
         add_section_header("FOLLOW", "集合")
         follow = sets_data.get('follow', {})
         for nt in sorted(follow.keys()):
             name = parser.display(nt)
-            add_row(f"Follow({name})", "=", fmt_set(follow[nt]))
+            add_row(f"Follow({name})", "=", self._fmt_set(follow[nt]))
 
         # ====== 4. SELECT 集 ======
         add_section_header("SELECT", "集合")
@@ -234,7 +236,151 @@ class LexerApp(tk.Tk):
                 rhs_str = " ".join(parser.display(s) for s in rhs_list)
 
             prod_str = f"{lhs_disp} -> {rhs_str}"
-            add_row(f"Select({prod_str})", "=", fmt_set(terms))
+            add_row(f"Select({prod_str})", "=", self._fmt_set(terms))
+
+    def run_generate_and_export(self):
+        """合并运行词法分析和生成分析表，并导出结果到本地文件"""
+        if LL1Parser is None:
+            messagebox.showerror("错误", "未找到 parser_core.py 或导入失败")
+            return
+
+        code = self.input_text.get("1.0", tk.END)
+        if not code.strip():
+            messagebox.showwarning("警告", "请先输入或加载 C 源代码")
+            return
+
+        lexer = Lexer(code)
+        tokens = lexer.tokenize()
+
+        # 显示词法 Token 流
+        self.notebook.select(0)
+        self.lexer_tab.config(state='normal')
+        self.lexer_tab.delete("1.0", tk.END)
+        for t in tokens:
+            t_type = TYPES.get(t.type, 'UNK')
+            self.lexer_tab.insert(tk.END, f"[L{t.line:<2}] ({t_type:<15} : {t.attribute})\n")
+        self.lexer_tab.config(state='disabled')
+
+        # 运行语法分析
+        try:
+            parser = LL1Parser()
+        except Exception as e:
+            messagebox.showerror("文法构建错误", f"构建预测分析表时出错:\n{e}")
+            return
+
+        sets_data = None
+        if hasattr(parser, 'calc_sets'):
+            sets_data = parser.calc_sets()
+            self.display_sets(parser, sets_data)
+
+        records, success, message = parser.analyze(tokens)
+
+        self.notebook.select(1)
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+        for step, stack, inp, prod, action in records:
+            self.tree.insert("", tk.END, values=(step, stack, inp, prod, action))
+
+        # 选择导出目录
+        export_dir = filedialog.askdirectory(title="选择导出目录")
+        if not export_dir:
+            # 用户取消选择，仍显示分析结果
+            if success:
+                messagebox.showinfo("成功", message)
+            else:
+                messagebox.showerror("语法错误", message)
+            return
+
+        # 导出词法 Token 流
+        try:
+            self._export_tokens(tokens, export_dir)
+            self._export_records(records, export_dir)
+            if sets_data:
+                self._export_sets(parser, sets_data, export_dir)
+        except IOError as e:
+            messagebox.showerror("导出错误", f"导出文件时出错:\n{e}")
+            return
+
+        if success:
+            messagebox.showinfo("成功", f"{message}\n\n结果已导出到: {export_dir}")
+        else:
+            messagebox.showerror("语法错误", f"{message}\n\n结果已导出到: {export_dir}")
+
+    def _export_tokens(self, tokens, export_dir):
+        """导出词法 Token 流到文件"""
+        filepath = os.path.join(export_dir, "lexer_tokens.txt")
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write("=" * 60 + "\n")
+            f.write("词法 Token 流\n")
+            f.write("=" * 60 + "\n\n")
+            for t in tokens:
+                t_type = TYPES.get(t.type, 'UNK')
+                f.write(f"[L{t.line:<2}] ({t_type:<15} : {t.attribute})\n")
+
+    def _export_records(self, records, export_dir):
+        """导出语法分析过程到文件"""
+        filepath = os.path.join(export_dir, "parser_records.txt")
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write("=" * 120 + "\n")
+            f.write("语法分析过程表\n")
+            f.write("=" * 120 + "\n\n")
+            f.write(f"{'步骤':<6} | {'分析栈':<40} | {'符号串':<30} | {'产生式':<25} | {'动作'}\n")
+            f.write("-" * 120 + "\n")
+            for step, stack, inp, prod, action in records:
+                f.write(f"{step:<6} | {stack:<40} | {inp:<30} | {prod:<25} | {action}\n")
+
+    def _export_sets(self, parser, sets_data, export_dir):
+        """导出文法集合到文件"""
+        filepath = os.path.join(export_dir, "grammar_sets.txt")
+
+        with open(filepath, 'w', encoding='utf-8') as f:
+            # 文法定义
+            f.write("=" * 80 + "\n")
+            f.write("文法定义 G[S]\n")
+            f.write("=" * 80 + "\n\n")
+            for lhs, rhss in parser.grammar.prods.items():
+                lhs_disp = parser.display(lhs)
+                rhs_texts = []
+                for rhs in rhss:
+                    if rhs == ['epsilon']:
+                        rhs_texts.append("ε")
+                    else:
+                        rhs_texts.append(" ".join(parser.display(s) for s in rhs))
+                f.write(f"{lhs_disp} -> {' | '.join(rhs_texts)}\n")
+
+            # FIRST 集
+            f.write("\n" + "=" * 80 + "\n")
+            f.write("FIRST 集合\n")
+            f.write("=" * 80 + "\n\n")
+            first = sets_data.get('first', {})
+            for nt in sorted(first.keys()):
+                name = parser.display(nt)
+                f.write(f"First({name}) = {self._fmt_set(first[nt])}\n")
+
+            # FOLLOW 集
+            f.write("\n" + "=" * 80 + "\n")
+            f.write("FOLLOW 集合\n")
+            f.write("=" * 80 + "\n\n")
+            follow = sets_data.get('follow', {})
+            for nt in sorted(follow.keys()):
+                name = parser.display(nt)
+                f.write(f"Follow({name}) = {self._fmt_set(follow[nt])}\n")
+
+            # SELECT 集
+            f.write("\n" + "=" * 80 + "\n")
+            f.write("SELECT 集合\n")
+            f.write("=" * 80 + "\n\n")
+            select = sets_data.get('select', {})
+            sorted_select = sorted(select.items(), key=lambda x: x[0][0])
+            for (lhs, rhs_tuple), terms in sorted_select:
+                lhs_disp = parser.display(lhs)
+                rhs_list = list(rhs_tuple)
+                if not rhs_list or rhs_list == ["epsilon"]:
+                    rhs_str = "ε"
+                else:
+                    rhs_str = " ".join(parser.display(s) for s in rhs_list)
+                prod_str = f"{lhs_disp} -> {rhs_str}"
+                f.write(f"Select({prod_str}) = {self._fmt_set(terms)}\n")
 
     def clear_all(self):
         self.input_text.delete("1.0", tk.END)
