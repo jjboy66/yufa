@@ -208,10 +208,8 @@ class LexerApp(tk.Tk):
 
         # 保存 parser 和 sets_data 供导出使用
         self._parser = parser
-        self._sets_data = None
-        if hasattr(parser, 'calc_sets'):
-            self._sets_data = parser.calc_sets()
-            self.display_sets(parser, self._sets_data)
+        self._sets_data = parser.calc_sets()
+        self.display_sets(parser, self._sets_data)
 
         records, success, message = parser.analyze(tokens)
 
@@ -249,15 +247,11 @@ class LexerApp(tk.Tk):
 
         # --- 核心辅助函数：插入显眼的表头 ---
         def add_section_header(title_left, title_right):
-            # 插入一个空行（白色背景）
+            # 插入一个空行作为分隔
             self.sets_tree.insert("", tk.END, values=("", "", ""))
 
             # 构造左右填充的文本
-            # 左边：====== TitlePart1
-            # 右边：TitlePart2 ======
-            # 中间：留空
-
-            fill_char = "=" * 30 # 大量的等号
+            fill_char = "=" * 30
             val_left = f"{fill_char} {title_left}"
             val_right = f"{title_right} {fill_char}"
 
