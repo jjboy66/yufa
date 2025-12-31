@@ -295,7 +295,7 @@ class LexerApp(tk.Tk):
 
     def export_grammar_sets(self):
         """导出文法和集合到本地文件"""
-        if not hasattr(self, '_parser') or self._parser is None:
+        if self._parser is None:
             messagebox.showwarning("警告", "请先运行词法和语法分析")
             return
 
@@ -400,6 +400,9 @@ class LexerApp(tk.Tk):
             self.tree.delete(item)
         for item in self.sets_tree.get_children():
             self.sets_tree.delete(item)
+        # Reset saved analysis results
+        self._parser = None
+        self._sets_data = None
 
 if __name__ == '__main__':
     app = LexerApp()
