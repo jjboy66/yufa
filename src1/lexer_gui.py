@@ -1,6 +1,7 @@
 """
 C 语言编译器实验 - 语法分析 (修复行号同步版)
 """
+import os
 import tkinter as tk
 from tkinter import filedialog, scrolledtext, messagebox, ttk, font
 from lexer_core import Lexer, TYPES, STRING_, CONST_CHAR, EOF
@@ -16,6 +17,17 @@ class LexerApp(tk.Tk):
         self.geometry("1400x850")
         self.text_font = font.Font(family="Consolas", size=10) 
         self.header_font = font.Font(family="Microsoft YaHei", size=11, weight="bold")
+
+        # --- 样式配置 ---
+        style = ttk.Style()
+        # 设置 Treeview 行高，避免太拥挤
+        style.configure("Sets.Treeview", font=("Consolas", 10), rowheight=25)
+        style.configure("Sets.Treeview.Heading", font=("Microsoft YaHei", 10, "bold"))
+
+        # 保存分析结果供导出使用
+        self._parser = None
+        self._sets_data = None
+
         self.create_widgets()
 
     def create_widgets(self):
@@ -26,6 +38,7 @@ class LexerApp(tk.Tk):
         ttk.Button(top_frame, text="运行词法分析", command=self.run_analysis).pack(side='left', padx=5)
         ttk.Button(top_frame, text="生成语法分析表", command=self.run_parser).pack(side='left', padx=5)
         ttk.Button(top_frame, text="生成预测分析表", command=self.on_gen_predict_table_clicked).pack(side='left', padx=5)
+        ttk.Button(top_frame, text="导出文法和集合", command=self.export_grammar_sets).pack(side='left', padx=5)
         ttk.Button(top_frame, text="清除全部", command=self.clear_all).pack(side='right', padx=5)
         ttk.Button(top_frame, text="执行并导出词法 TXT", command=self.save_txt_as).pack(side='left', padx=5)
         ttk.Button(top_frame, text="执行并导出语法 Excel", command=self.save_xlsx_as).pack(side='left', padx=5)
@@ -80,6 +93,39 @@ class LexerApp(tk.Tk):
         
         # 在这个 Tab 内部创建表格控件
         self.setup_predict_treeview()
+
+        # 4. 新增：文法集合 Tab
+        self.sets_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.sets_frame, text=" 文法集合 (Sets) ")
+
+        # 定义三列：左部(右对齐), 符号(居中), 右部(左对齐)
+        sets_cols = ("left", "op", "right")
+        self.sets_tree = ttk.Treeview(self.sets_frame, columns=sets_cols, show='headings', style="Sets.Treeview")
+
+        # 配置列
+        self.sets_tree.heading("left", text="文法/集合 左部")
+        self.sets_tree.column("left", width=350, anchor='e')  # 右对齐 -> 往中间靠
+
+        self.sets_tree.heading("op", text="符号")
+        self.sets_tree.column("op", width=50, anchor='center') # 居中
+
+        self.sets_tree.heading("right", text="文法右部 / 集合内容")
+        self.sets_tree.column("right", width=500, anchor='w')  # 左对齐 -> 往中间靠
+
+        # --- 关键：配置表头行的 Tag 样式 ---
+        # background: 浅灰色背景，显眼
+        # font: 加粗，大一号
+        self.sets_tree.tag_configure("header", background="#e1e1e1", foreground="#000000", font=("Microsoft YaHei", 10, "bold"))
+
+        vsb_sets = ttk.Scrollbar(self.sets_frame, orient="vertical", command=self.sets_tree.yview)
+        hsb_sets = ttk.Scrollbar(self.sets_frame, orient="horizontal", command=self.sets_tree.xview)
+        self.sets_tree.configure(yscrollcommand=vsb_sets.set, xscrollcommand=hsb_sets.set)
+
+        self.sets_tree.grid(row=0, column=0, sticky='nsew')
+        vsb_sets.grid(row=0, column=1, sticky='ns')
+        hsb_sets.grid(row=1, column=0, sticky='ew')
+        self.sets_frame.grid_columnconfigure(0, weight=1)
+        self.sets_frame.grid_rowconfigure(0, weight=1)
 
         columns = ("step", "stack", "input", "production", "action")
         self.tree = ttk.Treeview(self.parser_tab, columns=columns, show='headings')
@@ -160,6 +206,11 @@ class LexerApp(tk.Tk):
         tokens = lexer.tokenize()
         parser = LL1Parser()
 
+        # 保存 parser 和 sets_data 供导出使用
+        self._parser = parser
+        self._sets_data = parser.calc_sets()
+        self.display_sets(parser, self._sets_data)
+
         records, success, message = parser.analyze(tokens)
 
         self.notebook.select(1)
@@ -178,6 +229,155 @@ class LexerApp(tk.Tk):
         self.lexer_tab.delete("1.0", tk.END)
         self.lexer_tab.config(state='disabled')
         for item in self.tree.get_children(): self.tree.delete(item)
+        for item in self.sets_tree.get_children(): self.sets_tree.delete(item)
+        # Reset saved analysis results
+        self._parser = None
+        self._sets_data = None
+
+    @staticmethod
+    def _fmt_set(s):
+        """Format a set for display"""
+        elements = sorted(list(s))
+        return "{" + ", ".join(elements) + "}"
+
+    def display_sets(self, parser, sets_data):
+        # 清空
+        for item in self.sets_tree.get_children():
+            self.sets_tree.delete(item)
+
+        # --- 核心辅助函数：插入显眼的表头 ---
+        def add_section_header(title_left, title_right):
+            # 插入一个空行作为分隔
+            self.sets_tree.insert("", tk.END, values=("", "", ""))
+
+            # 构造左右填充的文本
+            fill_char = "=" * 30
+            val_left = f"{fill_char} {title_left}"
+            val_right = f"{title_right} {fill_char}"
+
+            # 插入带 tag 的行
+            self.sets_tree.insert("", tk.END, values=(val_left, "", val_right), tags=("header",))
+
+        def add_row(left, op, right):
+            self.sets_tree.insert("", tk.END, values=(left, op, right))
+
+        # ====== 1. 文法定义 ======
+        # 将标题拆分为 "文法定义" 和 "G[S]"，分别放在左右两列
+        add_section_header("文法定义", "G[S]")
+        for lhs, rhss in parser.grammar.prods.items():
+            lhs_disp = parser.display(lhs)
+            rhs_texts = []
+            for rhs in rhss:
+                if rhs == ['epsilon']:
+                    rhs_texts.append("ε")
+                else:
+                    rhs_texts.append(" ".join(parser.display(s) for s in rhs))
+            add_row(lhs_disp, "->", ' | '.join(rhs_texts))
+
+        # ====== 2. FIRST 集 ======
+        add_section_header("FIRST", "集合")
+        first = sets_data.get('first', {})
+        for nt in sorted(first.keys()):
+            name = parser.display(nt)
+            add_row(f"First({name})", "=", self._fmt_set(first[nt]))
+
+        # ====== 3. FOLLOW 集 ======
+        add_section_header("FOLLOW", "集合")
+        follow = sets_data.get('follow', {})
+        for nt in sorted(follow.keys()):
+            name = parser.display(nt)
+            add_row(f"Follow({name})", "=", self._fmt_set(follow[nt]))
+
+        # ====== 4. SELECT 集 ======
+        add_section_header("SELECT", "集合")
+        select = sets_data.get('select', {})
+        sorted_select = sorted(select.items(), key=lambda x: x[0][0])
+
+        for (lhs, rhs_tuple), terms in sorted_select:
+            lhs_disp = parser.display(lhs)
+            rhs_list = list(rhs_tuple)
+            if not rhs_list or rhs_list == ["epsilon"]:
+                rhs_str = "ε"
+            else:
+                rhs_str = " ".join(parser.display(s) for s in rhs_list)
+
+            prod_str = f"{lhs_disp} -> {rhs_str}"
+            add_row(f"Select({prod_str})", "=", self._fmt_set(terms))
+
+    def export_grammar_sets(self):
+        """导出文法和集合到本地文件"""
+        if self._parser is None:
+            messagebox.showwarning("警告", "请先运行词法和语法分析")
+            return
+
+        if self._sets_data is None:
+            messagebox.showwarning("警告", "没有可导出的文法集合数据")
+            return
+
+        # 选择导出目录
+        export_dir = filedialog.askdirectory(title="选择导出目录")
+        if not export_dir:
+            return
+
+        # 导出文法集合
+        try:
+            self._export_sets(self._parser, self._sets_data, export_dir)
+            messagebox.showinfo("成功", f"文法集合已导出到: {export_dir}/grammar_sets.txt")
+        except IOError as e:
+            messagebox.showerror("导出错误", f"导出文件时出错:\n{e}")
+
+    def _export_sets(self, parser, sets_data, export_dir):
+        """导出文法集合到文件"""
+        filepath = os.path.join(export_dir, "grammar_sets.txt")
+
+        with open(filepath, 'w', encoding='utf-8') as f:
+            # 文法定义
+            f.write("=" * 80 + "\n")
+            f.write("文法定义 G[S]\n")
+            f.write("=" * 80 + "\n\n")
+            for lhs, rhss in parser.grammar.prods.items():
+                lhs_disp = parser.display(lhs)
+                rhs_texts = []
+                for rhs in rhss:
+                    if rhs == ['epsilon']:
+                        rhs_texts.append("ε")
+                    else:
+                        rhs_texts.append(" ".join(parser.display(s) for s in rhs))
+                f.write(f"{lhs_disp} -> {' | '.join(rhs_texts)}\n")
+
+            # FIRST 集
+            f.write("\n" + "=" * 80 + "\n")
+            f.write("FIRST 集合\n")
+            f.write("=" * 80 + "\n\n")
+            first = sets_data.get('first', {})
+            for nt in sorted(first.keys()):
+                name = parser.display(nt)
+                f.write(f"First({name}) = {self._fmt_set(first[nt])}\n")
+
+            # FOLLOW 集
+            f.write("\n" + "=" * 80 + "\n")
+            f.write("FOLLOW 集合\n")
+            f.write("=" * 80 + "\n\n")
+            follow = sets_data.get('follow', {})
+            for nt in sorted(follow.keys()):
+                name = parser.display(nt)
+                f.write(f"Follow({name}) = {self._fmt_set(follow[nt])}\n")
+
+            # SELECT 集
+            f.write("\n" + "=" * 80 + "\n")
+            f.write("SELECT 集合\n")
+            f.write("=" * 80 + "\n\n")
+            select = sets_data.get('select', {})
+            sorted_select = sorted(select.items(), key=lambda x: x[0][0])
+            for (lhs, rhs_tuple), terms in sorted_select:
+                lhs_disp = parser.display(lhs)
+                rhs_list = list(rhs_tuple)
+                if not rhs_list or rhs_list == ["epsilon"]:
+                    rhs_str = "ε"
+                else:
+                    rhs_str = " ".join(parser.display(s) for s in rhs_list)
+                prod_str = f"{lhs_disp} -> {rhs_str}"
+                f.write(f"Select({prod_str}) = {self._fmt_set(terms)}\n")
         
     def setup_predict_treeview(self):
         # 创建滚动条
