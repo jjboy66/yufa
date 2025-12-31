@@ -25,6 +25,10 @@ class LexerApp(tk.Tk):
         style.configure("Sets.Treeview", font=("Consolas", 10), rowheight=25)
         style.configure("Sets.Treeview.Heading", font=("Microsoft YaHei", 10, "bold"))
 
+        # 保存分析结果供导出使用
+        self._parser = None
+        self._sets_data = None
+
         self.create_widgets()
 
     def create_widgets(self):
@@ -33,7 +37,8 @@ class LexerApp(tk.Tk):
         top_frame.pack(fill='x')
 
         ttk.Button(top_frame, text="1. 加载 C 文件", command=self.load_file).pack(side='left', padx=5)
-        ttk.Button(top_frame, text="2. 生成导表", command=self.run_generate_and_export).pack(side='left', padx=5)
+        ttk.Button(top_frame, text="2. 运行词法和语法分析", command=self.run_analysis_and_parser).pack(side='left', padx=5)
+        ttk.Button(top_frame, text="3. 导出文法和集合", command=self.export_grammar_sets).pack(side='left', padx=5)
         ttk.Button(top_frame, text="清除全部", command=self.clear_all).pack(side='right', padx=5)
 
         self.paned_window = ttk.PanedWindow(self, orient='horizontal')
@@ -238,8 +243,8 @@ class LexerApp(tk.Tk):
             prod_str = f"{lhs_disp} -> {rhs_str}"
             add_row(f"Select({prod_str})", "=", self._fmt_set(terms))
 
-    def run_generate_and_export(self):
-        """合并运行词法分析和生成分析表，并导出结果到本地文件"""
+    def run_analysis_and_parser(self):
+        """运行词法分析和语法分析"""
         if LL1Parser is None:
             messagebox.showerror("错误", "未找到 parser_core.py 或导入失败")
             return
@@ -268,10 +273,12 @@ class LexerApp(tk.Tk):
             messagebox.showerror("文法构建错误", f"构建预测分析表时出错:\n{e}")
             return
 
-        sets_data = None
+        # 保存 parser 和 sets_data 供导出使用
+        self._parser = parser
+        self._sets_data = None
         if hasattr(parser, 'calc_sets'):
-            sets_data = parser.calc_sets()
-            self.display_sets(parser, sets_data)
+            self._sets_data = parser.calc_sets()
+            self.display_sets(parser, self._sets_data)
 
         records, success, message = parser.analyze(tokens)
 
@@ -281,30 +288,32 @@ class LexerApp(tk.Tk):
         for step, stack, inp, prod, action in records:
             self.tree.insert("", tk.END, values=(step, stack, inp, prod, action))
 
+        if success:
+            messagebox.showinfo("成功", message)
+        else:
+            messagebox.showerror("语法错误", message)
+
+    def export_grammar_sets(self):
+        """导出文法和集合到本地文件"""
+        if not hasattr(self, '_parser') or self._parser is None:
+            messagebox.showwarning("警告", "请先运行词法和语法分析")
+            return
+
+        if self._sets_data is None:
+            messagebox.showwarning("警告", "没有可导出的文法集合数据")
+            return
+
         # 选择导出目录
         export_dir = filedialog.askdirectory(title="选择导出目录")
         if not export_dir:
-            # 用户取消选择，仍显示分析结果
-            if success:
-                messagebox.showinfo("成功", message)
-            else:
-                messagebox.showerror("语法错误", message)
             return
 
-        # 导出词法 Token 流
+        # 导出文法集合
         try:
-            self._export_tokens(tokens, export_dir)
-            self._export_records(records, export_dir)
-            if sets_data:
-                self._export_sets(parser, sets_data, export_dir)
+            self._export_sets(self._parser, self._sets_data, export_dir)
+            messagebox.showinfo("成功", f"文法集合已导出到: {export_dir}/grammar_sets.txt")
         except IOError as e:
             messagebox.showerror("导出错误", f"导出文件时出错:\n{e}")
-            return
-
-        if success:
-            messagebox.showinfo("成功", f"{message}\n\n结果已导出到: {export_dir}")
-        else:
-            messagebox.showerror("语法错误", f"{message}\n\n结果已导出到: {export_dir}")
 
     def _export_tokens(self, tokens, export_dir):
         """导出词法 Token 流到文件"""
