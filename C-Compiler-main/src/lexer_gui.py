@@ -164,14 +164,16 @@ class LexerApp(tk.Tk):
         else:
             messagebox.showerror("语法错误", message)
 
+    @staticmethod
+    def _fmt_set(s):
+        """Format a set for display"""
+        elements = sorted(list(s))
+        return "{" + ", ".join(elements) + "}"
+
     def display_sets(self, parser, sets_data):
         # 清空
         for item in self.sets_tree.get_children():
             self.sets_tree.delete(item)
-
-        def fmt_set(s):
-            elements = sorted(list(s))
-            return "{" + ", ".join(elements) + "}"
 
         # --- 核心辅助函数：插入显眼的表头 ---
         def add_section_header(title_left, title_right):
@@ -211,14 +213,14 @@ class LexerApp(tk.Tk):
         first = sets_data.get('first', {})
         for nt in sorted(first.keys()):
             name = parser.display(nt)
-            add_row(f"First({name})", "=", fmt_set(first[nt]))
+            add_row(f"First({name})", "=", self._fmt_set(first[nt]))
 
         # ====== 3. FOLLOW 集 ======
         add_section_header("FOLLOW", "集合")
         follow = sets_data.get('follow', {})
         for nt in sorted(follow.keys()):
             name = parser.display(nt)
-            add_row(f"Follow({name})", "=", fmt_set(follow[nt]))
+            add_row(f"Follow({name})", "=", self._fmt_set(follow[nt]))
 
         # ====== 4. SELECT 集 ======
         add_section_header("SELECT", "集合")
@@ -234,7 +236,7 @@ class LexerApp(tk.Tk):
                 rhs_str = " ".join(parser.display(s) for s in rhs_list)
 
             prod_str = f"{lhs_disp} -> {rhs_str}"
-            add_row(f"Select({prod_str})", "=", fmt_set(terms))
+            add_row(f"Select({prod_str})", "=", self._fmt_set(terms))
 
     def run_generate_and_export(self):
         """合并运行词法分析和生成分析表，并导出结果到本地文件"""
@@ -290,12 +292,14 @@ class LexerApp(tk.Tk):
             return
 
         # 导出词法 Token 流
-        self._export_tokens(tokens, export_dir)
-        # 导出语法分析过程
-        self._export_records(records, export_dir)
-        # 导出文法集合
-        if sets_data:
-            self._export_sets(parser, sets_data, export_dir)
+        try:
+            self._export_tokens(tokens, export_dir)
+            self._export_records(records, export_dir)
+            if sets_data:
+                self._export_sets(parser, sets_data, export_dir)
+        except IOError as e:
+            messagebox.showerror("导出错误", f"导出文件时出错:\n{e}")
+            return
 
         if success:
             messagebox.showinfo("成功", f"{message}\n\n结果已导出到: {export_dir}")
@@ -329,10 +333,6 @@ class LexerApp(tk.Tk):
         """导出文法集合到文件"""
         filepath = os.path.join(export_dir, "grammar_sets.txt")
 
-        def fmt_set(s):
-            elements = sorted(list(s))
-            return "{" + ", ".join(elements) + "}"
-
         with open(filepath, 'w', encoding='utf-8') as f:
             # 文法定义
             f.write("=" * 80 + "\n")
@@ -355,7 +355,7 @@ class LexerApp(tk.Tk):
             first = sets_data.get('first', {})
             for nt in sorted(first.keys()):
                 name = parser.display(nt)
-                f.write(f"First({name}) = {fmt_set(first[nt])}\n")
+                f.write(f"First({name}) = {self._fmt_set(first[nt])}\n")
 
             # FOLLOW 集
             f.write("\n" + "=" * 80 + "\n")
@@ -364,7 +364,7 @@ class LexerApp(tk.Tk):
             follow = sets_data.get('follow', {})
             for nt in sorted(follow.keys()):
                 name = parser.display(nt)
-                f.write(f"Follow({name}) = {fmt_set(follow[nt])}\n")
+                f.write(f"Follow({name}) = {self._fmt_set(follow[nt])}\n")
 
             # SELECT 集
             f.write("\n" + "=" * 80 + "\n")
@@ -380,7 +380,7 @@ class LexerApp(tk.Tk):
                 else:
                     rhs_str = " ".join(parser.display(s) for s in rhs_list)
                 prod_str = f"{lhs_disp} -> {rhs_str}"
-                f.write(f"Select({prod_str}) = {fmt_set(terms)}\n")
+                f.write(f"Select({prod_str}) = {self._fmt_set(terms)}\n")
 
     def clear_all(self):
         self.input_text.delete("1.0", tk.END)
